@@ -1,8 +1,8 @@
 commit: 3180f5a9
 
 estree_test262_tokens Summary:
-AST Parsed     : 46461/46461 (100.00%)
-Positive Passed: 6/46461 (0.01%)
+AST Parsed     : 46490/46490 (100.00%)
+Positive Passed: 6/46490 (0.01%)
 Token mismatch: tasks/coverage/test262/test/annexB/built-ins/Array/from/iterator-method-emulates-undefined.js
 
 Token mismatch: tasks/coverage/test262/test/annexB/built-ins/Date/prototype/getYear/B.2.4.js
@@ -10093,6 +10093,10 @@ Token mismatch: tasks/coverage/test262/test/built-ins/BigInt/prototype/toString/
 
 Token mismatch: tasks/coverage/test262/test/built-ins/BigInt/prototype/toString/radix-err.js
 
+Token mismatch: tasks/coverage/test262/test/built-ins/BigInt/prototype/toString/radix-tointegerorinfinity-throws-symbol.js
+
+Token mismatch: tasks/coverage/test262/test/built-ins/BigInt/prototype/toString/radix-tointegerorinfinity-throws-toprimitive-or-bigint.js
+
 Token mismatch: tasks/coverage/test262/test/built-ins/BigInt/prototype/toString/string-is-code-units-of-decimal-digits-only.js
 
 Token mismatch: tasks/coverage/test262/test/built-ins/BigInt/prototype/toString/thisbigintvalue-not-valid-throws.js
@@ -17104,6 +17108,12 @@ Token mismatch: tasks/coverage/test262/test/built-ins/Number/prototype/toFixed/p
 Token mismatch: tasks/coverage/test262/test/built-ins/Number/prototype/toFixed/range.js
 
 Token mismatch: tasks/coverage/test262/test/built-ins/Number/prototype/toFixed/return-type.js
+
+Token mismatch: tasks/coverage/test262/test/built-ins/Number/prototype/toFixed/toFixed-tonumber-throws-typeerror-bigint.js
+
+Token mismatch: tasks/coverage/test262/test/built-ins/Number/prototype/toFixed/toFixed-tonumber-throws-typeerror-symbol.js
+
+Token mismatch: tasks/coverage/test262/test/built-ins/Number/prototype/toFixed/toFixed-tonumber-throws-typeerror-toprimitive.js
 
 Token mismatch: tasks/coverage/test262/test/built-ins/Number/prototype/toLocaleString/length.js
 
@@ -33759,6 +33769,10 @@ Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/compare/
 
 Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/compare/relativeto-string-limits.js
 
+Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/compare/relativeto-string-wrong-offset.js
+
+Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/compare/relativeto-string.js
+
 Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/compare/relativeto-sub-minute-offset.js
 
 Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/compare/relativeto-undefined-throw-on-calendar-units.js
@@ -34109,15 +34123,31 @@ Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/prototyp
 
 Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/prototype/round/relativeto-argument-string-calendar-invalid-iso-string.js
 
+Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/prototype/round/relativeto-balances-down-differently-depending-on-relative-date.js
+
+Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/prototype/round/relativeto-balances-up-differently-depending-on-relative-date.js
+
+Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/prototype/round/relativeto-casts-relative-date-to-plain-date.js
+
 Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/prototype/round/relativeto-date-limits.js
+
+Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/prototype/round/relativeto-days-24-hours-relative-to-plain-date.js
+
+Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/prototype/round/relativeto-days-24-hours-relative-to-zoned-date-time.js
+
+Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/prototype/round/relativeto-duration-out-of-range-added-to-relative-date.js
 
 Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/prototype/round/relativeto-ignores-incorrect-properties.js
 
 Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/prototype/round/relativeto-infinity-throws-rangeerror.js
 
+Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/prototype/round/relativeto-largestunit-smallestunit-combinations.js
+
 Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/prototype/round/relativeto-leap-second.js
 
 Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/prototype/round/relativeto-no-fractional-minutes-hours.js
+
+Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/prototype/round/relativeto-not-required-to-round-non-calendar-units.js
 
 Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/prototype/round/relativeto-number.js
 
@@ -34139,11 +34169,21 @@ Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/prototyp
 
 Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/prototype/round/relativeto-propertybag-timezone-wrong-type.js
 
+Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/prototype/round/relativeto-required-for-rounding-durations-with-calendar-units.js
+
 Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/prototype/round/relativeto-required-properties.js
+
+Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/prototype/round/relativeto-required-to-round-calendar-units.js
+
+Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/prototype/round/relativeto-rounding-date.js
 
 Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/prototype/round/relativeto-string-invalid.js
 
 Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/prototype/round/relativeto-string-limits.js
+
+Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/prototype/round/relativeto-string-wrong-offset.js
+
+Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/prototype/round/relativeto-string.js
 
 Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/prototype/round/relativeto-sub-minute-offset.js
 
@@ -34499,6 +34539,8 @@ Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/prototyp
 
 Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/prototype/total/relativeto-date-limits.js
 
+Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/prototype/total/relativeto-duration-out-of-range-added-to-relative-date.js
+
 Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/prototype/total/relativeto-infinity-throws-rangeerror.js
 
 Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/prototype/total/relativeto-leap-second.js
@@ -34535,7 +34577,13 @@ Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/prototyp
 
 Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/prototype/total/relativeto-string-limits.js
 
+Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/prototype/total/relativeto-string-wrong-offset.js
+
+Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/prototype/total/relativeto-string.js
+
 Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/prototype/total/relativeto-sub-minute-offset.js
+
+Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/prototype/total/relativeto-total-of-each-unit.js
 
 Token mismatch: tasks/coverage/test262/test/built-ins/Temporal/Duration/prototype/total/relativeto-undefined-throw-on-calendar-units.js
 
@@ -75398,6 +75446,16 @@ Token mismatch: tasks/coverage/test262/test/language/import/import-attributes/js
 Token mismatch: tasks/coverage/test262/test/language/import/import-attributes/json-value-string.js
 
 Token mismatch: tasks/coverage/test262/test/language/import/import-attributes/json-via-namespace.js
+
+Token mismatch: tasks/coverage/test262/test/language/import/import-bytes/bytes-from-empty.js
+
+Token mismatch: tasks/coverage/test262/test/language/import/import-bytes/bytes-from-js.js
+
+Token mismatch: tasks/coverage/test262/test/language/import/import-bytes/bytes-from-json.js
+
+Token mismatch: tasks/coverage/test262/test/language/import/import-bytes/bytes-from-png.js
+
+Token mismatch: tasks/coverage/test262/test/language/import/import-bytes/bytes-from-txt.js
 
 Token mismatch: tasks/coverage/test262/test/language/import/import-defer/errors/get-other-while-dep-evaluating/main.js
 
