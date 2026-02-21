@@ -306,6 +306,20 @@ impl<'a> Lexer<'a> {
         token
     }
 
+    /// Overwrite the last token in the collected token stream.
+    ///
+    /// Used to restore a token that was popped by `re_lex_as_typescript_l_angle`
+    /// when `try_parse` fails and rewinds.
+    pub(crate) fn rewrite_last_collected_token(&mut self, token: Token) {
+        if self.collect_tokens {
+            debug_assert!(!self.tokens.is_empty());
+        }
+
+        if let Some(last) = self.tokens.last_mut() {
+            *last = token;
+        }
+    }
+
     pub(crate) fn take_tokens(&mut self) -> ArenaVec<'a, Token> {
         std::mem::replace(&mut self.tokens, ArenaVec::new_in(self.allocator))
     }
