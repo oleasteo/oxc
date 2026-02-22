@@ -13,124 +13,32 @@ use oxc_estree::{
 use oxc_parser::{Kind, Token};
 use oxc_span::{GetSpan, Span};
 
-/// Serializer config for tokens.
-/// We never include ranges, so use this custom config which returns `false` for `ranges()`.
-/// This allows compiler to remove the branch which checks if should print ranges from `serialize_span`.
-struct TokenConfig;
-
-impl Config for TokenConfig {
-    const INCLUDE_TS_FIELDS: bool = false;
-    const FIXES: bool = false;
-
-    #[expect(clippy::inline_always)] // It's a no-op
-    #[inline(always)]
-    fn new(_ranges: bool) -> Self {
-        Self
-    }
-
-    // Never include ranges, so always return `false`.
-    // `#[inline(always)]` to ensure compiler removes dead code resulting from the static value
-    #[expect(clippy::inline_always)]
-    #[inline(always)]
-    fn ranges(&self) -> bool {
-        false
-    }
-}
-
-type CompactTokenSerializer = ESTreeSerializer<TokenConfig, CompactFormatter>;
-type PrettyTokenSerializer = ESTreeSerializer<TokenConfig, PrettyFormatter>;
-
-/// Token whose value is guaranteed JSON-safe.
+/// Options for serializing tokens.
 ///
-/// Used for identifiers, keywords, punctuators, numbers, booleans, `null` — any token whose
-/// raw source text cannot contain quotes, backslashes, or control characters.
+/// Espree (`test262`) and TS-ESLint (`typescript`) differ in several ways:
 ///
-/// Both `token_type` and `value` are wrapped in `JsonSafeString` during serialization,
-/// skipping the byte-by-byte escape check that `EstreeUnsafeToken` performs.
-struct EstreeSafeToken<'a> {
-    token_type: &'static str,
-    value: &'a str,
-    span: Span,
-}
-
-impl ESTree for EstreeSafeToken<'_> {
-    fn serialize<S: Serializer>(&self, serializer: S) {
-        let mut state = serializer.serialize_struct();
-        state.serialize_field("type", &JsonSafeString(self.token_type));
-        state.serialize_field("value", &JsonSafeString(self.value));
-        state.serialize_span(self.span);
-        state.end();
-    }
-}
-
-/// Token whose value may not be JSON-safe.
-///
-/// Used for strings, templates, regexes, JSXText.
-pub struct EstreeUnsafeToken<'a> {
-    pub token_type: &'static str,
-    pub value: &'a str,
-    pub span: Span,
-}
-
-impl ESTree for EstreeUnsafeToken<'_> {
-    fn serialize<S: Serializer>(&self, serializer: S) {
-        let mut state = serializer.serialize_struct();
-        state.serialize_field("type", &JsonSafeString(self.token_type));
-        state.serialize_field("value", &self.value);
-        state.serialize_span(self.span);
-        state.end();
-    }
-}
-
-/// `RegularExpression` token.
-///
-/// This is a separate type from `EstreeToken` because RegExp tokens have a nested `regex` object
-/// containing `flags` and `pattern`, and the token type is always `"RegularExpression"`.
-/// Pattern is taken from the AST node (`RegExpLiteral.regex.pattern.text`), and flags are sliced
-/// from source text to preserve the original order (the AST stores flags as a bitfield which
-/// would alphabetize them).
-struct EstreeRegExpToken<'a> {
-    value: &'a str,
-    regex: RegExpData<'a>,
-    span: Span,
-}
-
-/// The `regex` sub-object inside a `RegularExpression` token.
-struct RegExpData<'a> {
-    flags: &'a str,
-    pattern: &'a str,
-}
-
-impl ESTree for EstreeRegExpToken<'_> {
-    fn serialize<S: Serializer>(&self, serializer: S) {
-        let mut state = serializer.serialize_struct();
-        state.serialize_field("type", &JsonSafeString("RegularExpression"));
-        state.serialize_field("value", &self.value);
-        state.serialize_field("regex", &self.regex);
-        state.serialize_span(self.span);
-        state.end();
-    }
-}
-
-impl ESTree for RegExpData<'_> {
-    fn serialize<S: Serializer>(&self, serializer: S) {
-        let mut state = serializer.serialize_struct();
-        // Flags are single ASCII letters (d, g, i, m, s, u, v, y) — always JSON-safe
-        state.serialize_field("flags", &JsonSafeString(self.flags));
-        state.serialize_field("pattern", &self.pattern);
-        state.end();
-    }
-}
-
+/// * `yield`, `let`, `static` used as identifiers (`obj = { yield: 1, let: 2, static: 3 };`)
+///   * Espree emits these as `Keyword` tokens.
+///   * TS-ESLint as `Identifier` tokens.
+/// * Escaped identifiers (e.g. `\u0061`)
+///   * Espree decodes escapes in the token `value`.
+///   * TS-ESLint preserves the raw source text.
+/// * JSX namespaced names (`<ns:tag>`)
+///   * Espree emits `JSXIdentifier` tokens for both parts,
+///   * TS-ESLint leaves them as their default token type (`Identifier`).
+/// * Member expressions in JSX expressions (`<C x={a.b}>`)
+///   * Espree emits them as `Identifier` tokens.
+///   * TS-ESLint emits `JSXIdentifier` tokens for non-computed member expression identifiers
+///     inside JSX expression containers.
 #[derive(Debug, Clone, Copy)]
-pub struct EstreeTokenOptions {
+pub struct ESTreeTokenOptions {
     pub exclude_legacy_keyword_identifiers: bool,
     pub decode_identifier_escapes: bool,
     pub jsx_namespace_jsx_identifiers: bool,
     pub member_expr_in_jsx_expression_jsx_identifiers: bool,
 }
 
-impl EstreeTokenOptions {
+impl ESTreeTokenOptions {
     pub const fn test262() -> Self {
         Self {
             exclude_legacy_keyword_identifiers: true,
@@ -165,13 +73,13 @@ impl EstreeTokenOptions {
 /// Token span conversion to UTF-16 is handled internally.
 ///
 /// `source_text` must be the original source text, prior to BOM removal.
-/// i.e. BOM must be present on start of `source_text`, if the file has a BOM.
+/// i.e. if the file has a BOM, it must be present at the start of `source_text`.
 pub fn to_estree_tokens_json(
     tokens: &[Token],
     program: &Program<'_>,
     source_text: &str,
     span_converter: &Utf8ToUtf16,
-    options: EstreeTokenOptions,
+    options: ESTreeTokenOptions,
 ) -> String {
     // Estimated size of a single token serialized to JSON, in bytes.
     // TODO: Estimate this better based on real-world usage.
@@ -189,13 +97,13 @@ pub fn to_estree_tokens_json(
 /// Token span conversion to UTF-16 is handled internally.
 ///
 /// `source_text` must be the original source text, prior to BOM removal.
-/// i.e. BOM must be present on start of `source_text`, if the file has a BOM.
+/// i.e. if the file has a BOM, it must be present at the start of `source_text`.
 pub fn to_estree_tokens_pretty_json(
     tokens: &[Token],
     program: &Program<'_>,
     source_text: &str,
     span_converter: &Utf8ToUtf16,
-    options: EstreeTokenOptions,
+    options: ESTreeTokenOptions,
 ) -> String {
     // Estimated size of a single token serialized to JSON, in bytes.
     // TODO: Estimate this better based on real-world usage.
@@ -207,21 +115,131 @@ pub fn to_estree_tokens_pretty_json(
     serializer.into_string()
 }
 
-/// Walk AST and serialize each token to the serializer as it's encountered.
+/// Serializer config for tokens.
+/// We never include ranges, so use this custom config which returns `false` for `ranges()`.
+/// This allows compiler to remove the branch which checks whether to print ranges in `serialize_span`.
+struct TokenSerializerConfig;
+
+impl Config for TokenSerializerConfig {
+    const INCLUDE_TS_FIELDS: bool = false;
+    const FIXES: bool = false;
+
+    #[expect(clippy::inline_always)] // It's a no-op
+    #[inline(always)]
+    fn new(_ranges: bool) -> Self {
+        Self
+    }
+
+    // Never include ranges, so always return `false`.
+    // `#[inline(always)]` to ensure compiler removes dead code resulting from the static value.
+    #[expect(clippy::inline_always)]
+    #[inline(always)]
+    fn ranges(&self) -> bool {
+        false
+    }
+}
+
+type CompactTokenSerializer = ESTreeSerializer<TokenSerializerConfig, CompactFormatter>;
+type PrettyTokenSerializer = ESTreeSerializer<TokenSerializerConfig, PrettyFormatter>;
+
+/// Token whose value is guaranteed JSON-safe.
 ///
-/// Tokens are consumed from the `tokens` slice in source order. When a visitor method
-/// encounters an AST node that requires a token type override (e.g. a keyword used as an
-/// identifier), it serializes all preceding tokens with their default types, then serializes
-/// the overridden token with its corrected type.
+/// Used for identifiers, keywords, punctuators, numbers, booleans, `null` —
+/// any token whose `value` cannot contain quotes, backslashes, or control characters.
+///
+/// Both `token_type` and `value` are wrapped in `JsonSafeString` during serialization,
+/// skipping the expensive byte-by-byte encoding that `ESTreeUnsafeToken` performs.
+struct ESTreeSafeToken<'a> {
+    token_type: &'static str,
+    value: &'a str,
+    span: Span,
+}
+
+impl ESTree for ESTreeSafeToken<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        let mut state = serializer.serialize_struct();
+        state.serialize_field("type", &JsonSafeString(self.token_type));
+        state.serialize_field("value", &JsonSafeString(self.value));
+        state.serialize_span(self.span);
+        state.end();
+    }
+}
+
+/// Token whose `value` may not be JSON-safe.
+///
+/// Used for strings, templates, and JSXText.
+struct ESTreeUnsafeToken<'a> {
+    token_type: &'static str,
+    value: &'a str,
+    span: Span,
+}
+
+impl ESTree for ESTreeUnsafeToken<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        let mut state = serializer.serialize_struct();
+        state.serialize_field("type", &JsonSafeString(self.token_type));
+        state.serialize_field("value", &self.value);
+        state.serialize_span(self.span);
+        state.end();
+    }
+}
+
+/// `RegularExpression` token.
+///
+/// This is a separate type from `ESTreeSafeToken` / `ESTreeUnsafeToken` because RegExp tokens have
+/// a nested `regex` object containing `flags` and `pattern`.
+///
+/// Pattern is taken from the AST node (`RegExpLiteral.regex.pattern.text`).
+/// Flags are sliced from source text to preserve the original order
+/// (the AST stores flags as a bitfield which would alphabetize them).
+struct ESTreeRegExpToken<'a> {
+    value: &'a str,
+    regex: RegExpData<'a>,
+    span: Span,
+}
+
+/// The `regex` sub-object inside `ESTreeRegExpToken`.
+struct RegExpData<'a> {
+    flags: &'a str,
+    pattern: &'a str,
+}
+
+impl ESTree for ESTreeRegExpToken<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        let mut state = serializer.serialize_struct();
+        state.serialize_field("type", &JsonSafeString("RegularExpression"));
+        state.serialize_field("value", &self.value);
+        state.serialize_field("regex", &self.regex);
+        state.serialize_span(self.span);
+        state.end();
+    }
+}
+
+impl ESTree for RegExpData<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        let mut state = serializer.serialize_struct();
+        // Flags are single ASCII letters (d, g, i, m, s, u, v, y) — always JSON-safe
+        state.serialize_field("flags", &JsonSafeString(self.flags));
+        state.serialize_field("pattern", &self.pattern);
+        state.end();
+    }
+}
+
+/// Walk AST and serialize each token into the serializer as it's encountered.
+///
+/// Tokens are consumed from the `tokens` slice in source order.
+/// When a visitor method encounters an AST node that requires a token type override
+/// (e.g. a keyword used as an identifier), it serializes all preceding tokens with their default types,
+/// then serializes the overridden token with its corrected type.
 fn serialize_tokens(
     serializer: impl Serializer,
     tokens: &[Token],
     program: &Program<'_>,
     source_text: &str,
     span_converter: &Utf8ToUtf16,
-    options: EstreeTokenOptions,
+    options: ESTreeTokenOptions,
 ) {
-    let mut context = EstreeTokenContext {
+    let mut context = ESTreeTokenContext {
         seq: serializer.serialize_sequence(),
         tokens: tokens.iter(),
         source_text,
@@ -237,15 +255,17 @@ fn serialize_tokens(
 
 /// Visitor that walks the AST and serializes tokens as it encounters them.
 ///
-/// Tokens are consumed from a slice in source order. When a visitor method encounters
+/// Tokens are consumed from `tokens` iterator in source order. When a visitor method encounters
 /// an AST node that requires a token type override, all preceding tokens are serialized
 /// with their default types, then the overridden token is serialized with its corrected type.
 /// After the AST walk, any remaining tokens are serialized with default types.
-struct EstreeTokenContext<'b, S: SequenceSerializer> {
+///
+/// This works because AST visitation occurs in source order, so same order as tokens in the iterator.
+struct ESTreeTokenContext<'b, S: SequenceSerializer> {
     /// JSON sequence serializer.
     /// Tokens are serialized into this serializer.
     seq: S,
-    /// Token iterator
+    /// Tokens iterator
     tokens: Iter<'b, Token>,
     /// Source text (for extracting token values)
     source_text: &'b str,
@@ -253,14 +273,14 @@ struct EstreeTokenContext<'b, S: SequenceSerializer> {
     /// `None` if source is ASCII-only.
     span_converter: Option<Utf8ToUtf16Converter<'b>>,
     /// Options
-    options: EstreeTokenOptions,
-    // State
+    options: ESTreeTokenOptions,
+    // JSX state. Used in TS-ESLint emulation mode.
     jsx_expression_depth: usize,
     jsx_member_expression_depth: usize,
     jsx_computed_member_depth: usize,
 }
 
-impl<'b, S: SequenceSerializer> EstreeTokenContext<'b, S> {
+impl<'b, S: SequenceSerializer> ESTreeTokenContext<'b, S> {
     /// Emit the token at `start` as `Identifier`, unless it's a legacy keyword and
     /// `exclude_legacy_keyword_identifiers` is set (in which case it gets `Keyword` type).
     ///
@@ -279,15 +299,16 @@ impl<'b, S: SequenceSerializer> EstreeTokenContext<'b, S> {
             "Identifier"
         };
 
-        // Use `name` from AST node in most cases — it's JSON-safe so can skip escape checking.
+        // Use `name` from AST node in most cases — it's JSON-safe so can skip JSON encoding.
         // Only fall back to raw source text when the token contains escapes and decoding is disabled,
-        // since raw escape sequences contain `\` which needs JSON escaping.
+        // since escape sequences contain `\` which needs JSON escaping.
+        // Escaped identifiers are extremely rare, so handle them in `#[cold]` branch.
         if self.options.decode_identifier_escapes || !token.escaped() {
             self.serialize_safe_token(token, token_type, name);
         } else {
             #[cold]
             fn emit<S: SequenceSerializer>(
-                ctx: &mut EstreeTokenContext<'_, S>,
+                ctx: &mut ESTreeTokenContext<'_, S>,
                 token: &Token,
                 token_type: &'static str,
             ) {
@@ -297,26 +318,26 @@ impl<'b, S: SequenceSerializer> EstreeTokenContext<'b, S> {
         }
     }
 
-    /// Emit the `this` keyword at `start` as `"Identifier"`.
+    /// Emit the `this` keyword at `start` as `Identifier`.
     /// Used for `this` in TS type queries and TS `this` parameters.
     fn emit_this_identifier_at(&mut self, start: u32) {
         self.emit_safe_token_at(start, "Identifier", "this");
     }
 
-    /// Emit the token at `start` as `"JSXIdentifier"`.
+    /// Emit the token at `start` as `JSXIdentifier`.
     /// JSX identifier names are guaranteed JSON-safe (no unicode escapes, no special characters).
     fn emit_jsx_identifier_at(&mut self, start: u32, name: &str) {
         self.emit_safe_token_at(start, "JSXIdentifier", name);
     }
 
-    /// Emit the token at `start` as specified token type,
+    /// Emit the token at `start` as the specified token type,
     /// where the token's `value` is guaranteed JSON-safe.
     fn emit_safe_token_at(&mut self, start: u32, token_type: &'static str, value: &str) {
         let token = self.advance_to(start);
         self.serialize_safe_token(token, token_type, value);
     }
 
-    /// Emit the token at `start` as specified token type,
+    /// Emit the token at `start` as the specified token type,
     /// where the token's `value` may not be JSON-safe.
     fn emit_unsafe_token_at(&mut self, start: u32, token_type: &'static str) {
         let token = self.advance_to(start);
@@ -345,52 +366,52 @@ impl<'b, S: SequenceSerializer> EstreeTokenContext<'b, S> {
         unreachable!("Expected token at position {start}");
     }
 
-    /// Serialize a single token using its raw source text, skipping JSON escape checking.
+    /// Serialize a single token using its raw source text, skipping JSON encoding.
     ///
     /// Used for tokens whose values are guaranteed JSON-safe
     /// (punctuators, keywords, numbers, booleans, `null`).
     ///
-    /// The token's type is determined by the token's `Kind`.
+    /// The token's type is determined by its `Kind`.
     fn emit_safe_token(&mut self, token: &Token) {
         let token_type = get_token_type(token.kind());
         let value = &self.source_text[token.start() as usize..token.end() as usize];
         self.serialize_safe_token(token, token_type, value);
     }
 
-    /// Serialize a single token using its raw source text, with JSON escape checking.
+    /// Serialize a single token using its raw source text, with JSON encoding.
     /// Used for tokens whose values may contain backslashes, quotes, or control characters
-    /// (string literals, template literals, JSXText).
+    /// (escaped identifiers, string literals, template literals, JSXText).
     fn emit_unsafe_token(&mut self, token: &Token, token_type: &'static str) {
         let value = &self.source_text[token.start() as usize..token.end() as usize];
         self.serialize_unsafe_token(token, token_type, value);
     }
 
-    /// Serialize a token whose value is guaranteed JSON-safe, skipping escape-checking.
+    /// Serialize a token whose value is guaranteed JSON-safe, skipping JSON-encoding.
     fn serialize_safe_token(&mut self, token: &Token, token_type: &'static str, value: &str) {
-        // Convert offsets to UTF-16
+        // Convert span to UTF-16
         let mut span = Span::new(token.start(), token.end());
         if let Some(converter) = self.span_converter.as_mut() {
             converter.convert_span(&mut span);
         }
 
-        self.seq.serialize_element(&EstreeSafeToken { token_type, value, span });
+        self.seq.serialize_element(&ESTreeSafeToken { token_type, value, span });
     }
 
     /// Serialize a token whose value may not be JSON-safe.
     fn serialize_unsafe_token(&mut self, token: &Token, token_type: &'static str, value: &str) {
-        // Convert offsets to UTF-16
+        // Convert span to UTF-16
         let mut span = Span::new(token.start(), token.end());
         if let Some(converter) = self.span_converter.as_mut() {
             converter.convert_span(&mut span);
         }
 
-        self.seq.serialize_element(&EstreeUnsafeToken { token_type, value, span });
+        self.seq.serialize_element(&ESTreeUnsafeToken { token_type, value, span });
     }
 
     /// Serialize all remaining tokens and close the sequence.
     ///
     /// Tokens emitted here are guaranteed JSON-safe because all non-JSON-safe token types
-    /// (strings, templates, regexes, JSXText) are consumed by their own visitors.
+    /// (escaped identifiers, strings, templates, regexes, JSXText) are consumed by their own visitors.
     fn finish(mut self) {
         while let Some(token) = self.tokens.next() {
             self.emit_safe_token(token);
@@ -399,7 +420,7 @@ impl<'b, S: SequenceSerializer> EstreeTokenContext<'b, S> {
     }
 }
 
-impl<'a, S: SequenceSerializer> Visit<'a> for EstreeTokenContext<'_, S> {
+impl<'a, S: SequenceSerializer> Visit<'a> for ESTreeTokenContext<'_, S> {
     fn visit_ts_type_query_expr_name(&mut self, expr_name: &TSTypeQueryExprName<'a>) {
         // `this` is emitted as `Identifier` token instead of `Keyword`
         match expr_name {
@@ -435,12 +456,13 @@ impl<'a, S: SequenceSerializer> Visit<'a> for EstreeTokenContext<'_, S> {
 
     fn visit_ts_import_type(&mut self, import_type: &TSImportType<'a>) {
         // Manual walk.
-        // * `source` is a `StringLiteral` — visit to ensure it's emitted with escape checking
+        // * `source` is a `StringLiteral` — visit to ensure it's emitted with JSON encoding
         //   (string values are not JSON-safe).
         // * `options` is an `ObjectExpression`. Manually walk each property, but don't visit the key if it's `with`,
-        //   as it needs to remain "Keyword" token, not get converted to "Identifier".
+        //   as it needs to remain a `Keyword` token, not get converted to `Identifier`.
         // * `qualifier` and `type_arguments` are visited as usual.
         self.visit_string_literal(&import_type.source);
+
         if let Some(options) = &import_type.options {
             for property in &options.properties {
                 match property {
@@ -460,9 +482,11 @@ impl<'a, S: SequenceSerializer> Visit<'a> for EstreeTokenContext<'_, S> {
                 }
             }
         }
+
         if let Some(qualifier) = &import_type.qualifier {
             self.visit_ts_import_type_qualifier(qualifier);
         }
+
         if let Some(type_arguments) = &import_type.type_arguments {
             self.visit_ts_type_parameter_instantiation(type_arguments);
         }
@@ -506,11 +530,12 @@ impl<'a, S: SequenceSerializer> Visit<'a> for EstreeTokenContext<'_, S> {
         // `identifier.name` has `#` stripped and escapes decoded by the parser, and is JSON-safe.
         // Only fall back to slicing raw source text when the token contains escapes and decoding
         // is disabled, since raw escape sequences contain `\` which needs JSON escaping.
+        // Escaped identifiers are extremely rare, so handle them in `#[cold]` branch.
         if self.options.decode_identifier_escapes || !token.escaped() {
             self.serialize_safe_token(token, "PrivateIdentifier", &identifier.name);
         } else {
             #[cold]
-            fn emit<S: SequenceSerializer>(ctx: &mut EstreeTokenContext<'_, S>, token: &Token) {
+            fn emit<S: SequenceSerializer>(ctx: &mut ESTreeTokenContext<'_, S>, token: &Token) {
                 // Strip leading `#`
                 let value = &ctx.source_text[token.start() as usize + 1..token.end() as usize];
                 ctx.serialize_unsafe_token(token, "PrivateIdentifier", value);
@@ -529,13 +554,13 @@ impl<'a, S: SequenceSerializer> Visit<'a> for EstreeTokenContext<'_, S> {
         let flags = &value[pattern.len() + 2..];
         let regex = RegExpData { flags, pattern };
 
-        // Convert offsets to UTF-16
+        // Convert span to UTF-16
         let mut span = Span::new(token.start(), token.end());
         if let Some(converter) = self.span_converter.as_mut() {
             converter.convert_span(&mut span);
         }
 
-        self.seq.serialize_element(&EstreeRegExpToken { value, regex, span });
+        self.seq.serialize_element(&ESTreeRegExpToken { value, regex, span });
     }
 
     fn visit_ts_this_parameter(&mut self, parameter: &TSThisParameter<'a>) {
@@ -545,13 +570,13 @@ impl<'a, S: SequenceSerializer> Visit<'a> for EstreeTokenContext<'_, S> {
 
     fn visit_meta_property(&mut self, _meta_property: &MetaProperty<'a>) {
         // Don't walk.
-        // * `meta` (either `import` or `new`) has a "Keyword" token already, which is correct.
-        // * `property` (either `meta` or `target`) has an "Identifier" token, which is correct.
+        // * `meta` (either `import` or `new`) has a `Keyword` token already, which is correct.
+        // * `property` (either `meta` or `target`) has an `Identifier` token, which is correct.
     }
 
     fn visit_object_property(&mut self, property: &ObjectProperty<'a>) {
         // For shorthand `{ x }`, key and value share the same span.
-        // Skip the key to avoid double-flagging.
+        // Skip the key to avoid emitting the same token twice.
         if !property.shorthand {
             self.visit_property_key(&property.key);
         }
@@ -559,6 +584,8 @@ impl<'a, S: SequenceSerializer> Visit<'a> for EstreeTokenContext<'_, S> {
     }
 
     fn visit_binding_property(&mut self, property: &BindingProperty<'a>) {
+        // For shorthand `{ x }`, key and value share the same span.
+        // Skip the key to avoid emitting the same token twice.
         if !property.shorthand {
             self.visit_property_key(&property.key);
         }
@@ -567,7 +594,7 @@ impl<'a, S: SequenceSerializer> Visit<'a> for EstreeTokenContext<'_, S> {
 
     fn visit_import_specifier(&mut self, specifier: &ImportSpecifier<'a>) {
         // For `import { x }`, `imported` and `local` share the same span.
-        // Only visit `imported` when it differs from `local`.
+        // Only visit `imported` when it differs from `local`, to avoid emitting the same token twice.
         if specifier.imported.span() != specifier.local.span {
             self.visit_module_export_name(&specifier.imported);
         }
@@ -576,7 +603,7 @@ impl<'a, S: SequenceSerializer> Visit<'a> for EstreeTokenContext<'_, S> {
 
     fn visit_export_specifier(&mut self, specifier: &ExportSpecifier<'a>) {
         // For `export { x }`, `local` and `exported` share the same span.
-        // Only visit `exported` when it differs from `local`.
+        // Only visit `exported` when it differs from `local`, to avoid emitting the same token twice.
         self.visit_module_export_name(&specifier.local);
         if specifier.exported.span() != specifier.local.span() {
             self.visit_module_export_name(&specifier.exported);
@@ -656,7 +683,7 @@ impl<'a, S: SequenceSerializer> Visit<'a> for EstreeTokenContext<'_, S> {
     fn visit_jsx_attribute(&mut self, attribute: &JSXAttribute<'a>) {
         // Manual walk.
         // * `name`: Visit normally.
-        // * `value`: Set `JSXText` token type if is a `StringLiteral`.
+        // * `value`: Set `JSXText` token type if it's a `StringLiteral`.
         self.visit_jsx_attribute_name(&attribute.name);
         match &attribute.value {
             Some(JSXAttributeValue::StringLiteral(string_literal)) => {
@@ -689,7 +716,7 @@ impl<'a, S: SequenceSerializer> Visit<'a> for EstreeTokenContext<'_, S> {
     }
 }
 
-impl<S: SequenceSerializer> EstreeTokenContext<'_, S> {
+impl<S: SequenceSerializer> ESTreeTokenContext<'_, S> {
     /// Emit template quasis interleaved with their interpolated parts (expressions or TS types).
     ///
     /// `TemplateElement.span` excludes delimiters (parser adjusts `start + 1`),
@@ -715,8 +742,9 @@ impl<S: SequenceSerializer> EstreeTokenContext<'_, S> {
     }
 }
 
+/// Get token type for a token `Kind`.
 fn get_token_type(kind: Kind) -> &'static str {
-    // Token's with these `Kind`s are always consumed by specific visitors and should never reach here
+    // Tokens with these `Kind`s are always consumed by specific visitors and should never reach here
     debug_assert!(
         !matches!(
             kind,
