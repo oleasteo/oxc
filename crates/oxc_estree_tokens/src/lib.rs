@@ -40,13 +40,39 @@ impl Config for TokenConfig {
 type CompactTokenSerializer = ESTreeSerializer<TokenConfig, CompactFormatter>;
 type PrettyTokenSerializer = ESTreeSerializer<TokenConfig, PrettyFormatter>;
 
-pub struct EstreeToken<'a> {
+/// Token whose value is guaranteed JSON-safe.
+///
+/// Used for identifiers, keywords, punctuators, numbers, booleans, `null` — any token whose
+/// raw source text cannot contain quotes, backslashes, or control characters.
+///
+/// Both `token_type` and `value` are wrapped in `JsonSafeString` during serialization,
+/// skipping the byte-by-byte escape check that `EstreeUnsafeToken` performs.
+struct EstreeSafeToken<'a> {
+    token_type: &'static str,
+    value: &'a str,
+    span: Span,
+}
+
+impl ESTree for EstreeSafeToken<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) {
+        let mut state = serializer.serialize_struct();
+        state.serialize_field("type", &JsonSafeString(self.token_type));
+        state.serialize_field("value", &JsonSafeString(self.value));
+        state.serialize_span(self.span);
+        state.end();
+    }
+}
+
+/// Token whose value may not be JSON-safe.
+///
+/// Used for strings, templates, regexes, JSXText.
+pub struct EstreeUnsafeToken<'a> {
     pub token_type: &'static str,
     pub value: &'a str,
     pub span: Span,
 }
 
-impl ESTree for EstreeToken<'_> {
+impl ESTree for EstreeUnsafeToken<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) {
         let mut state = serializer.serialize_struct();
         state.serialize_field("type", &JsonSafeString(self.token_type));
@@ -56,7 +82,7 @@ impl ESTree for EstreeToken<'_> {
     }
 }
 
-/// Token type for RegExps.
+/// `RegularExpression` token.
 ///
 /// This is a separate type from `EstreeToken` because RegExp tokens have a nested `regex` object
 /// containing `flags` and `pattern`, and the token type is always `"RegularExpression"`.
@@ -92,31 +118,6 @@ impl ESTree for RegExpData<'_> {
         // Flags are single ASCII letters (d, g, i, m, s, u, v, y) — always JSON-safe
         state.serialize_field("flags", &JsonSafeString(self.flags));
         state.serialize_field("pattern", &self.pattern);
-        state.end();
-    }
-}
-
-/// Token type for identifiers (and keywords which are used as identifiers).
-///
-/// Despite the name, this type is also used for tokens with `"Keyword"` or `"PrivateIdentifier"`
-/// type — it covers any token whose value is guaranteed JSON-safe.
-///
-/// This is a separate type from `EstreeToken` for two reasons:
-/// 1. It has no `regex` field (identifiers never have regex data).
-/// 2. Value is wrapped in `JsonSafeString` during serialization, skipping escape-checking.
-///    Identifier names are guaranteed JSON-safe (no quotes, backslashes, or control characters).
-struct EstreeIdentToken<'a> {
-    token_type: &'static str,
-    value: &'a str,
-    span: Span,
-}
-
-impl ESTree for EstreeIdentToken<'_> {
-    fn serialize<S: Serializer>(&self, serializer: S) {
-        let mut state = serializer.serialize_struct();
-        state.serialize_field("type", &JsonSafeString(self.token_type));
-        state.serialize_field("value", &JsonSafeString(self.value));
-        state.serialize_span(self.span);
         state.end();
     }
 }
@@ -260,22 +261,15 @@ struct EstreeTokenContext<'b, S: SequenceSerializer> {
 }
 
 impl<'b, S: SequenceSerializer> EstreeTokenContext<'b, S> {
-    /// Serialize all tokens before `start` with default types,
-    /// then serialize the token at `start` with the given `token_type`.
-    fn emit_token_at(&mut self, start: u32, token_type: &'static str) {
-        let token = self.advance_to(start);
-        self.emit_token(token, token_type);
-    }
-
-    /// Emit the token at `start` as `"Identifier"`, unless it's a legacy keyword
-    /// and `exclude_legacy_keyword_identifiers` is set (in which case it gets its default type).
+    /// Emit the token at `start` as `Identifier`, unless it's a legacy keyword and
+    /// `exclude_legacy_keyword_identifiers` is set (in which case it gets `Keyword` type).
     ///
     /// `name` is the decoded identifier name from the AST node.
     /// When the token has no escapes, `name` points into the source text, same as slicing it.
     /// When the token has escapes and `decode_identifier_escapes` is enabled, `name` provides
     /// the decoded value. Only when escapes are present but decoding is disabled do we need to
     /// fall back to slicing the raw source text (preserving the escape sequences in the output).
-    fn emit_identifier(&mut self, start: u32, name: &str) {
+    fn emit_identifier_at(&mut self, start: u32, name: &str) {
         let token = self.advance_to(start);
         let token_type = if self.options.exclude_legacy_keyword_identifiers
             && matches!(token.kind(), Kind::Yield | Kind::Let | Kind::Static)
@@ -289,7 +283,7 @@ impl<'b, S: SequenceSerializer> EstreeTokenContext<'b, S> {
         // Only fall back to raw source text when the token contains escapes and decoding is disabled,
         // since raw escape sequences contain `\` which needs JSON escaping.
         if self.options.decode_identifier_escapes || !token.escaped() {
-            self.serialize_ident_token(token, token_type, name);
+            self.serialize_safe_token(token, token_type, name);
         } else {
             #[cold]
             fn emit<S: SequenceSerializer>(
@@ -297,7 +291,7 @@ impl<'b, S: SequenceSerializer> EstreeTokenContext<'b, S> {
                 token: &Token,
                 token_type: &'static str,
             ) {
-                ctx.emit_token(token, token_type);
+                ctx.emit_unsafe_token(token, token_type);
             }
             emit(self, token, token_type);
         }
@@ -305,24 +299,39 @@ impl<'b, S: SequenceSerializer> EstreeTokenContext<'b, S> {
 
     /// Emit the `this` keyword at `start` as `"Identifier"`.
     /// Used for `this` in TS type queries and TS `this` parameters.
-    fn emit_this_identifier(&mut self, start: u32) {
-        let token = self.advance_to(start);
-        self.serialize_ident_token(token, "Identifier", "this");
+    fn emit_this_identifier_at(&mut self, start: u32) {
+        self.emit_safe_token_at(start, "Identifier", "this");
     }
 
     /// Emit the token at `start` as `"JSXIdentifier"`.
     /// JSX identifier names are guaranteed JSON-safe (no unicode escapes, no special characters).
-    fn emit_jsx_identifier(&mut self, start: u32, name: &str) {
+    fn emit_jsx_identifier_at(&mut self, start: u32, name: &str) {
+        self.emit_safe_token_at(start, "JSXIdentifier", name);
+    }
+
+    /// Emit the token at `start` as specified token type,
+    /// where the token's `value` is guaranteed JSON-safe.
+    fn emit_safe_token_at(&mut self, start: u32, token_type: &'static str, value: &str) {
         let token = self.advance_to(start);
-        self.serialize_ident_token(token, "JSXIdentifier", name);
+        self.serialize_safe_token(token, token_type, value);
+    }
+
+    /// Emit the token at `start` as specified token type,
+    /// where the token's `value` may not be JSON-safe.
+    fn emit_unsafe_token_at(&mut self, start: u32, token_type: &'static str) {
+        let token = self.advance_to(start);
+        self.emit_unsafe_token(token, token_type);
     }
 
     /// Consume all tokens before `start` (emitting them with default types),
     /// and return the token at `start`.
+    ///
+    /// Tokens emitted here are guaranteed JSON-safe because all non-JSON-safe token types
+    /// (strings, templates, regexes, JSXText) are consumed by their own visitors.
     fn advance_to(&mut self, start: u32) -> &'b Token {
         while let Some(token) = self.tokens.next() {
             if token.start() < start {
-                self.emit_token(token, get_token_type(token.kind()));
+                self.emit_safe_token(token);
             } else {
                 debug_assert_eq!(
                     token.start(),
@@ -336,38 +345,55 @@ impl<'b, S: SequenceSerializer> EstreeTokenContext<'b, S> {
         unreachable!("Expected token at position {start}");
     }
 
-    /// Serialize a single token using its raw source text as the value.
-    fn emit_token(&mut self, token: &Token, token_type: &'static str) {
+    /// Serialize a single token using its raw source text, skipping JSON escape checking.
+    ///
+    /// Used for tokens whose values are guaranteed JSON-safe
+    /// (punctuators, keywords, numbers, booleans, `null`).
+    ///
+    /// The token's type is determined by the token's `Kind`.
+    fn emit_safe_token(&mut self, token: &Token) {
+        let token_type = get_token_type(token.kind());
         let value = &self.source_text[token.start() as usize..token.end() as usize];
-        self.serialize_token(token, token_type, value);
+        self.serialize_safe_token(token, token_type, value);
     }
 
-    /// Convert span to UTF-16 and serialize token.
-    fn serialize_token(&mut self, token: &Token, token_type: &'static str, value: &str) {
-        // Convert offsets to UTF-16
-        let mut span = Span::new(token.start(), token.end());
-        if let Some(converter) = self.span_converter.as_mut() {
-            converter.convert_span(&mut span);
-        }
-
-        self.seq.serialize_element(&EstreeToken { token_type, value, span });
+    /// Serialize a single token using its raw source text, with JSON escape checking.
+    /// Used for tokens whose values may contain backslashes, quotes, or control characters
+    /// (string literals, template literals, JSXText).
+    fn emit_unsafe_token(&mut self, token: &Token, token_type: &'static str) {
+        let value = &self.source_text[token.start() as usize..token.end() as usize];
+        self.serialize_unsafe_token(token, token_type, value);
     }
 
     /// Serialize a token whose value is guaranteed JSON-safe, skipping escape-checking.
-    fn serialize_ident_token(&mut self, token: &Token, token_type: &'static str, value: &str) {
+    fn serialize_safe_token(&mut self, token: &Token, token_type: &'static str, value: &str) {
         // Convert offsets to UTF-16
         let mut span = Span::new(token.start(), token.end());
         if let Some(converter) = self.span_converter.as_mut() {
             converter.convert_span(&mut span);
         }
 
-        self.seq.serialize_element(&EstreeIdentToken { token_type, value, span });
+        self.seq.serialize_element(&EstreeSafeToken { token_type, value, span });
+    }
+
+    /// Serialize a token whose value may not be JSON-safe.
+    fn serialize_unsafe_token(&mut self, token: &Token, token_type: &'static str, value: &str) {
+        // Convert offsets to UTF-16
+        let mut span = Span::new(token.start(), token.end());
+        if let Some(converter) = self.span_converter.as_mut() {
+            converter.convert_span(&mut span);
+        }
+
+        self.seq.serialize_element(&EstreeUnsafeToken { token_type, value, span });
     }
 
     /// Serialize all remaining tokens and close the sequence.
+    ///
+    /// Tokens emitted here are guaranteed JSON-safe because all non-JSON-safe token types
+    /// (strings, templates, regexes, JSXText) are consumed by their own visitors.
     fn finish(mut self) {
         while let Some(token) = self.tokens.next() {
-            self.emit_token(token, get_token_type(token.kind()));
+            self.emit_safe_token(token);
         }
         self.seq.end();
     }
@@ -381,7 +407,7 @@ impl<'a, S: SequenceSerializer> Visit<'a> for EstreeTokenContext<'_, S> {
         ) {
             match type_name {
                 TSTypeName::ThisExpression(this_expression) => {
-                    ctx.emit_this_identifier(this_expression.span.start);
+                    ctx.emit_this_identifier_at(this_expression.span.start);
                 }
                 TSTypeName::QualifiedName(qualified_name) => {
                     collect_type_query_this(ctx, &qualified_name.left);
@@ -392,7 +418,7 @@ impl<'a, S: SequenceSerializer> Visit<'a> for EstreeTokenContext<'_, S> {
 
         match &type_query.expr_name {
             TSTypeQueryExprName::ThisExpression(this_expression) => {
-                self.emit_this_identifier(this_expression.span.start);
+                self.emit_this_identifier_at(this_expression.span.start);
             }
             TSTypeQueryExprName::QualifiedName(qualified_name) => {
                 collect_type_query_this(self, &qualified_name.left);
@@ -405,10 +431,12 @@ impl<'a, S: SequenceSerializer> Visit<'a> for EstreeTokenContext<'_, S> {
 
     fn visit_ts_import_type(&mut self, import_type: &TSImportType<'a>) {
         // Manual walk.
-        // * `source` is a `StringLiteral` — can't contain identifiers, so we skip visiting it.
+        // * `source` is a `StringLiteral` — visit to ensure it's emitted with escape checking
+        //   (string values are not JSON-safe).
         // * `options` is an `ObjectExpression`. Manually walk each property, but don't visit the key if it's `with`,
         //   as it needs to remain "Keyword" token, not get converted to "Identifier".
         // * `qualifier` and `type_arguments` are visited as usual.
+        self.visit_string_literal(&import_type.source);
         if let Some(options) = &import_type.options {
             for property in &options.properties {
                 match property {
@@ -442,9 +470,9 @@ impl<'a, S: SequenceSerializer> Visit<'a> for EstreeTokenContext<'_, S> {
             && self.jsx_member_expression_depth > 0
             && self.jsx_computed_member_depth == 0
         {
-            self.emit_jsx_identifier(identifier.span.start, &identifier.name);
+            self.emit_jsx_identifier_at(identifier.span.start, &identifier.name);
         } else {
-            self.emit_identifier(identifier.span.start, &identifier.name);
+            self.emit_identifier_at(identifier.span.start, &identifier.name);
         }
     }
 
@@ -454,18 +482,18 @@ impl<'a, S: SequenceSerializer> Visit<'a> for EstreeTokenContext<'_, S> {
             && self.jsx_member_expression_depth > 0
             && self.jsx_computed_member_depth == 0
         {
-            self.emit_jsx_identifier(identifier.span.start, &identifier.name);
+            self.emit_jsx_identifier_at(identifier.span.start, &identifier.name);
         } else {
-            self.emit_identifier(identifier.span.start, &identifier.name);
+            self.emit_identifier_at(identifier.span.start, &identifier.name);
         }
     }
 
     fn visit_binding_identifier(&mut self, identifier: &BindingIdentifier<'a>) {
-        self.emit_identifier(identifier.span.start, &identifier.name);
+        self.emit_identifier_at(identifier.span.start, &identifier.name);
     }
 
     fn visit_label_identifier(&mut self, identifier: &LabelIdentifier<'a>) {
-        self.emit_identifier(identifier.span.start, &identifier.name);
+        self.emit_identifier_at(identifier.span.start, &identifier.name);
     }
 
     fn visit_private_identifier(&mut self, identifier: &PrivateIdentifier<'a>) {
@@ -475,13 +503,13 @@ impl<'a, S: SequenceSerializer> Visit<'a> for EstreeTokenContext<'_, S> {
         // Only fall back to slicing raw source text when the token contains escapes and decoding
         // is disabled, since raw escape sequences contain `\` which needs JSON escaping.
         if self.options.decode_identifier_escapes || !token.escaped() {
-            self.serialize_ident_token(token, "PrivateIdentifier", &identifier.name);
+            self.serialize_safe_token(token, "PrivateIdentifier", &identifier.name);
         } else {
             #[cold]
             fn emit<S: SequenceSerializer>(ctx: &mut EstreeTokenContext<'_, S>, token: &Token) {
                 // Strip leading `#`
                 let value = &ctx.source_text[token.start() as usize + 1..token.end() as usize];
-                ctx.serialize_token(token, "PrivateIdentifier", value);
+                ctx.serialize_unsafe_token(token, "PrivateIdentifier", value);
             }
             emit(self, token);
         }
@@ -507,7 +535,7 @@ impl<'a, S: SequenceSerializer> Visit<'a> for EstreeTokenContext<'_, S> {
     }
 
     fn visit_ts_this_parameter(&mut self, parameter: &TSThisParameter<'a>) {
-        self.emit_this_identifier(parameter.this_span.start);
+        self.emit_this_identifier_at(parameter.this_span.start);
         walk::walk_ts_this_parameter(self, parameter);
     }
 
@@ -552,12 +580,12 @@ impl<'a, S: SequenceSerializer> Visit<'a> for EstreeTokenContext<'_, S> {
     }
 
     fn visit_jsx_identifier(&mut self, identifier: &JSXIdentifier<'a>) {
-        self.emit_jsx_identifier(identifier.span.start, &identifier.name);
+        self.emit_jsx_identifier_at(identifier.span.start, &identifier.name);
     }
 
     fn visit_jsx_element_name(&mut self, name: &JSXElementName<'a>) {
         if let JSXElementName::IdentifierReference(identifier) = name {
-            self.emit_jsx_identifier(identifier.span.start, &identifier.name);
+            self.emit_jsx_identifier_at(identifier.span.start, &identifier.name);
         } else {
             walk::walk_jsx_element_name(self, name);
         }
@@ -565,7 +593,7 @@ impl<'a, S: SequenceSerializer> Visit<'a> for EstreeTokenContext<'_, S> {
 
     fn visit_jsx_member_expression_object(&mut self, object: &JSXMemberExpressionObject<'a>) {
         if let JSXMemberExpressionObject::IdentifierReference(identifier) = object {
-            self.emit_jsx_identifier(identifier.span.start, &identifier.name);
+            self.emit_jsx_identifier_at(identifier.span.start, &identifier.name);
         } else {
             walk::walk_jsx_member_expression_object(self, object);
         }
@@ -573,8 +601,8 @@ impl<'a, S: SequenceSerializer> Visit<'a> for EstreeTokenContext<'_, S> {
 
     fn visit_jsx_namespaced_name(&mut self, name: &JSXNamespacedName<'a>) {
         if self.options.jsx_namespace_jsx_identifiers {
-            self.emit_jsx_identifier(name.namespace.span.start, &name.namespace.name);
-            self.emit_jsx_identifier(name.name.span.start, &name.name.name);
+            self.emit_jsx_identifier_at(name.namespace.span.start, &name.namespace.name);
+            self.emit_jsx_identifier_at(name.name.span.start, &name.name.name);
         }
         // When `!jsx_namespace_jsx_identifiers`, these tokens retain their default type
     }
@@ -613,6 +641,14 @@ impl<'a, S: SequenceSerializer> Visit<'a> for EstreeTokenContext<'_, S> {
         self.jsx_expression_depth -= 1;
     }
 
+    fn visit_string_literal(&mut self, literal: &StringLiteral<'a>) {
+        self.emit_unsafe_token_at(literal.span.start, "String");
+    }
+
+    fn visit_jsx_text(&mut self, text: &JSXText<'a>) {
+        self.emit_unsafe_token_at(text.span.start, "JSXText");
+    }
+
     fn visit_jsx_attribute(&mut self, attribute: &JSXAttribute<'a>) {
         // Manual walk.
         // * `name`: Visit normally.
@@ -620,25 +656,80 @@ impl<'a, S: SequenceSerializer> Visit<'a> for EstreeTokenContext<'_, S> {
         self.visit_jsx_attribute_name(&attribute.name);
         match &attribute.value {
             Some(JSXAttributeValue::StringLiteral(string_literal)) => {
-                self.emit_token_at(string_literal.span.start, "JSXText");
+                self.emit_unsafe_token_at(string_literal.span.start, "JSXText");
             }
             Some(value) => self.visit_jsx_attribute_value(value),
             None => {}
         }
     }
+
+    fn visit_template_literal(&mut self, literal: &TemplateLiteral<'a>) {
+        // Manual walk.
+        // Interleave quasis and expressions in source order.
+        // The default walk visits all quasis first, then all expressions,
+        // which would break `advance_to`'s source-order token consumption.
+        self.emit_template_quasis_interleaved(
+            &literal.quasis,
+            Visit::visit_expression,
+            &literal.expressions,
+        );
+    }
+
+    fn visit_ts_template_literal_type(&mut self, literal: &TSTemplateLiteralType<'a>) {
+        // Same as `visit_template_literal` but with TS types instead of expressions.
+        self.emit_template_quasis_interleaved(
+            &literal.quasis,
+            Visit::visit_ts_type,
+            &literal.types,
+        );
+    }
+}
+
+impl<S: SequenceSerializer> EstreeTokenContext<'_, S> {
+    /// Emit template quasis interleaved with their interpolated parts (expressions or TS types).
+    ///
+    /// `TemplateElement.span` excludes delimiters (parser adjusts `start + 1`),
+    /// so subtract 1 to get the token start position.
+    fn emit_template_quasis_interleaved<I>(
+        &mut self,
+        quasis: &[TemplateElement<'_>],
+        mut visit_interpolation: impl FnMut(&mut Self, &I),
+        interpolations: &[I],
+    ) {
+        let mut quasis = quasis.iter();
+
+        // First quasi (TemplateHead or NoSubstitutionTemplate)
+        if let Some(quasi) = quasis.next() {
+            self.emit_unsafe_token_at(quasi.span.start - 1, "Template");
+        }
+
+        // Remaining quasis interleaved with interpolations
+        for (interpolation, quasi) in interpolations.iter().zip(quasis) {
+            visit_interpolation(self, interpolation);
+            self.emit_unsafe_token_at(quasi.span.start - 1, "Template");
+        }
+    }
 }
 
 fn get_token_type(kind: Kind) -> &'static str {
+    // Token's with these `Kind`s are always consumed by specific visitors and should never reach here
+    debug_assert!(
+        !matches!(
+            kind,
+            Kind::Str
+                | Kind::RegExp
+                | Kind::JSXText
+                | Kind::PrivateIdentifier
+                | Kind::NoSubstitutionTemplate
+                | Kind::TemplateHead
+                | Kind::TemplateMiddle
+                | Kind::TemplateTail
+        ),
+        "Token kind {kind:?} should be consumed by its visitor, and not reach `get_token_type`",
+    );
+
     match kind {
         Kind::Ident | Kind::Await => "Identifier",
-        Kind::PrivateIdentifier => "PrivateIdentifier",
-        Kind::JSXText => "JSXText",
-        Kind::Str => "String",
-        Kind::RegExp => "RegularExpression",
-        Kind::NoSubstitutionTemplate
-        | Kind::TemplateHead
-        | Kind::TemplateMiddle
-        | Kind::TemplateTail => "Template",
         Kind::True | Kind::False => "Boolean",
         Kind::Null => "Null",
         _ if kind.is_number() => "Numeric",
