@@ -199,6 +199,7 @@ pub enum Kind {
     PrivateIdentifier,
     // JSX
     JSXText,
+    JSXIdentifier,
     // Decorator
     At,
 }
@@ -675,6 +676,7 @@ impl Kind {
             TemplateTail => "}",
             PrivateIdentifier => "#identifier",
             JSXText => "jsx",
+            JSXIdentifier => "jsx_identifier",
             At => "@",
             Assert => "assert",
             Any => "any",

@@ -93,6 +93,15 @@ impl Token {
     }
 
     #[inline]
+    pub fn set_span(&mut self, span: Span) {
+        // On little-endian systems, `start` and `end` fields in `Span` are in same order as in `Token`,
+        // so compiler boils this down to just a `u64` write of the `Span` into the first 8 bytes of the `Token`
+        // https://godbolt.org/z/bdY5ccad6
+        self.set_start(span.start);
+        self.set_end(span.end);
+    }
+
+    #[inline]
     pub fn start(&self) -> u32 {
         ((self.0 >> START_SHIFT) & START_MASK) as u32
     }
@@ -125,7 +134,7 @@ impl Token {
     }
 
     #[inline]
-    pub(crate) fn set_kind(&mut self, kind: Kind) {
+    pub fn set_kind(&mut self, kind: Kind) {
         self.0 &= !(KIND_MASK << KIND_SHIFT); // Clear current `kind` bits
         self.0 |= u128::from(kind as u8) << KIND_SHIFT;
     }

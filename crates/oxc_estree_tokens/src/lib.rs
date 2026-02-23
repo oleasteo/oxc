@@ -12,6 +12,7 @@ pub use config::{
 };
 pub use jsx_state::{JSXState, JSXStateJS, JSXStateTS};
 use serialize::serialize_tokens;
+pub use serialize::update_tokens;
 
 /// Serializer config for tokens.
 /// We never include ranges, so use this custom config which returns `false` for `ranges()`.
