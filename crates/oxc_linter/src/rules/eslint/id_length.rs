@@ -1,8 +1,8 @@
 use std::ops::Deref;
 
-use schemars::JsonSchema;
 use icu_segmenter::GraphemeClusterSegmenter;
 use lazy_regex::Regex;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
