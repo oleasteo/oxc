@@ -20,7 +20,7 @@ use oxc_ast_macros::ast;
 use oxc_ast_visit::utf8_to_utf16::Utf8ToUtf16;
 use oxc_data_structures::box_macros::boxed_array;
 use oxc_diagnostics::OxcDiagnostic;
-use oxc_estree_tokens::{ESTreeTokenOptionsJS, to_estree_tokens_json};
+use oxc_estree_tokens::{ESTreeTokenOptionsJS, update_tokens};
 use oxc_semantic::AstNode;
 use oxc_span::Span;
 
@@ -499,7 +499,7 @@ impl Linter {
         &self,
         external_rules: &[(ExternalRuleId, ExternalOptionsId, AllowWarnDeny)],
         path: &Path,
-        ctx_host: &ContextHost<'_>,
+        ctx_host: &mut ContextHost<'_>,
         original_program: &mut Program<'_>,
         js_allocator_pool: &AllocatorPool,
     ) {
@@ -544,7 +544,7 @@ impl Linter {
         &self,
         external_rules: &[(ExternalRuleId, ExternalOptionsId, AllowWarnDeny)],
         path: &Path,
-        ctx_host: &ContextHost<'_>,
+        ctx_host: &mut ContextHost<'_>,
         program: &mut Program<'_>,
         allocator: &Allocator,
     ) {
@@ -570,18 +570,11 @@ impl Linter {
         };
 
         let (tokens_offset, tokens_len) =
-            if let Some(tokens) = ctx_host.current_sub_host().parser_tokens() {
-                let tokens_json = to_estree_tokens_json(
-                    tokens,
-                    program,
-                    original_source_text,
-                    &span_converter,
-                    ESTreeTokenOptionsJS,
-                );
-                let tokens_json = allocator.alloc_str(&tokens_json);
-                let tokens_offset = tokens_json.as_ptr() as u32;
+            if let Some(tokens) = ctx_host.current_sub_host_mut().parser_tokens_mut() {
+                update_tokens(tokens, program, &span_converter, ESTreeTokenOptionsJS);
+                let tokens_offset = tokens.as_ptr() as u32;
                 #[expect(clippy::cast_possible_truncation)]
-                let tokens_len = tokens_json.len() as u32;
+                let tokens_len = tokens.len() as u32;
                 (tokens_offset, tokens_len)
             } else {
                 (0, 0)

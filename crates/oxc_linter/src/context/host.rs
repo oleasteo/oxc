@@ -110,8 +110,8 @@ impl<'a> ContextSubHost<'a> {
     }
 
     /// Parser tokens collected for this script block.
-    pub fn parser_tokens(&self) -> Option<&[Token]> {
-        self.parser_tokens.as_ref().map(|tokens| &tokens[..])
+    pub fn parser_tokens_mut(&mut self) -> Option<&mut [Token]> {
+        self.parser_tokens.as_mut().map(|tokens| &mut tokens[..])
     }
 }
 
@@ -206,7 +206,7 @@ impl<'a> ContextHost<'a> {
     }
 
     /// Get mutable reference to the current [`ContextSubHost`]
-    fn current_sub_host_mut(&mut self) -> &mut ContextSubHost<'a> {
+    pub(crate) fn current_sub_host_mut(&mut self) -> &mut ContextSubHost<'a> {
         &mut self.sub_hosts[self.current_sub_host_index.get()]
     }
 

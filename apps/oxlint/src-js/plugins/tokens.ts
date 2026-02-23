@@ -3,7 +3,7 @@
  */
 
 import { ast, initAst } from "./source_code.ts";
-import { buffer, textDecoder } from "./source_code.ts";
+import { buffer, sourceText } from "./source_code.ts";
 import { getNodeLoc } from "./location.ts";
 import { TOKENS_OFFSET_POS_32, TOKENS_LEN_POS_32 } from "../generated/constants.ts";
 import { debugAssert, debugAssertIsNonNull } from "../utils/asserts.ts";
@@ -144,42 +144,264 @@ export let tokens: Token[] | null = null;
 let comments: Comment[] | null = null;
 export let tokensAndComments: TokenOrComment[] | null = null;
 
+let uint32: Uint32Array | null = null;
+
+const BYTES_PER_TOKEN = 16;
+
 /**
  * Initialize TS-ESLint tokens for current file.
  */
 export function initTokens() {
   debugAssert(tokens === null, "Tokens already initialized");
 
-  // Get tokens JSON from buffer, and deserialize it
+  // Deserialize tokens from buffer
   debugAssertIsNonNull(buffer);
+  debugAssertIsNonNull(sourceText);
 
-  const { uint32 } = buffer;
-  const tokensJsonLen = uint32[TOKENS_LEN_POS_32];
-  if (tokensJsonLen === 0) {
-    tokens = [];
-    return;
+  uint32 = buffer.uint32;
+  let pos = uint32[TOKENS_OFFSET_POS_32];
+  const len = uint32[TOKENS_LEN_POS_32];
+
+  tokens = [];
+
+  const endPos = pos + len * BYTES_PER_TOKEN;
+  while (pos < endPos) {
+    tokens.push(deserializeToken(pos));
+    pos += BYTES_PER_TOKEN;
   }
 
-  const tokensJsonOffset = uint32[TOKENS_OFFSET_POS_32];
-  const tokensJson = textDecoder.decode(
-    buffer.subarray(tokensJsonOffset, tokensJsonOffset + tokensJsonLen),
-  );
-  tokens = JSON.parse(tokensJson) as Token[];
-
-  // Add `range` property to each token, and set prototype of each to `TokenProto` which provides getter for `loc`
-  for (const token of tokens) {
-    const { start, end } = token;
-    debugAssert(
-      typeof start === "number" && typeof end === "number",
-      "Precomputed tokens should include `start` and `end`",
-    );
-
-    token.range = [start, end];
-    Object.setPrototypeOf(token, TokenProto);
-  }
+  uint32 = null;
 
   // Check `tokens` have valid ranges and are in ascending order
   debugCheckValidRanges(tokens, "token");
+}
+
+const LAST_KEYWORD_KIND = 88; // Yield
+const PRIVATE_IDENTIFIER_KIND = 166;
+const REGEXP_KIND = 161;
+
+const TOKEN_TYPES: Token["type"][] = [
+  "Null", // Eof
+  "Null", // Undetermined
+  "Null", // Skip
+  "Null", // HashbangComment
+  "Identifier", // Ident
+  "Identifier", // Await
+  "Keyword", // Break
+  "Keyword", // Case
+  "Keyword", // Catch
+  "Keyword", // Class
+  "Keyword", // Const
+  "Keyword", // Continue
+  "Keyword", // Debugger
+  "Keyword", // Default
+  "Keyword", // Delete
+  "Keyword", // Do
+  "Keyword", // Else
+  "Keyword", // Enum
+  "Keyword", // Export
+  "Keyword", // Extends
+  "Keyword", // Finally
+  "Keyword", // For
+  "Keyword", // Function
+  "Keyword", // If
+  "Keyword", // Import
+  "Keyword", // In
+  "Keyword", // Instanceof
+  "Keyword", // New
+  "Keyword", // Return
+  "Keyword", // Super
+  "Keyword", // Switch
+  "Keyword", // This
+  "Keyword", // Throw
+  "Keyword", // Try
+  "Keyword", // Typeof
+  "Keyword", // Var
+  "Keyword", // Void
+  "Keyword", // While
+  "Keyword", // With
+  "Identifier", // Async
+  "Identifier", // From
+  "Identifier", // Get
+  "Identifier", // Meta
+  "Identifier", // Of
+  "Identifier", // Set
+  "Identifier", // Target
+  "Identifier", // Accessor
+  "Identifier", // Source
+  "Identifier", // Defer
+  "Identifier", // Abstract
+  "Identifier", // As
+  "Identifier", // Asserts
+  "Identifier", // Assert
+  "Identifier", // Any
+  "Identifier", // Boolean
+  "Identifier", // Constructor
+  "Identifier", // Declare
+  "Identifier", // Infer
+  "Identifier", // Intrinsic
+  "Identifier", // Is
+  "Identifier", // KeyOf
+  "Identifier", // Module
+  "Identifier", // Namespace
+  "Identifier", // Never
+  "Identifier", // Out
+  "Identifier", // Readonly
+  "Identifier", // Require
+  "Identifier", // Number
+  "Identifier", // Object
+  "Identifier", // Satisfies
+  "Identifier", // String
+  "Identifier", // Symbol
+  "Identifier", // Type
+  "Identifier", // Undefined
+  "Identifier", // Unique
+  "Identifier", // Using
+  "Identifier", // Unknown
+  "Identifier", // Global
+  "Identifier", // BigInt
+  "Identifier", // Override
+  "Keyword", // Implements
+  "Keyword", // Interface
+  "Keyword", // Let
+  "Keyword", // Package
+  "Keyword", // Private
+  "Keyword", // Protected
+  "Keyword", // Public
+  "Keyword", // Static
+  "Keyword", // Yield
+  "Boolean", // True
+  "Boolean", // False
+  "Null", // Null
+  "Punctuator", // Amp
+  "Punctuator", // Amp2
+  "Punctuator", // Amp2Eq
+  "Punctuator", // AmpEq
+  "Punctuator", // Bang
+  "Punctuator", // Caret
+  "Punctuator", // CaretEq
+  "Punctuator", // Colon
+  "Punctuator", // Comma
+  "Punctuator", // Dot
+  "Punctuator", // Dot3
+  "Punctuator", // Eq
+  "Punctuator", // Eq2
+  "Punctuator", // Eq3
+  "Punctuator", // GtEq
+  "Punctuator", // LAngle
+  "Punctuator", // LBrack
+  "Punctuator", // LCurly
+  "Punctuator", // LParen
+  "Punctuator", // LtEq
+  "Punctuator", // Minus
+  "Punctuator", // Minus2
+  "Punctuator", // MinusEq
+  "Punctuator", // Neq
+  "Punctuator", // Neq2
+  "Punctuator", // Percent
+  "Punctuator", // PercentEq
+  "Punctuator", // Pipe
+  "Punctuator", // Pipe2
+  "Punctuator", // Pipe2Eq
+  "Punctuator", // PipeEq
+  "Punctuator", // Plus
+  "Punctuator", // Plus2
+  "Punctuator", // PlusEq
+  "Punctuator", // Question
+  "Punctuator", // Question2
+  "Punctuator", // Question2Eq
+  "Punctuator", // QuestionDot
+  "Punctuator", // RAngle
+  "Punctuator", // RBrack
+  "Punctuator", // RCurly
+  "Punctuator", // RParen
+  "Punctuator", // Semicolon
+  "Punctuator", // ShiftLeft
+  "Punctuator", // ShiftLeftEq
+  "Punctuator", // ShiftRight
+  "Punctuator", // ShiftRight3
+  "Punctuator", // ShiftRight3Eq
+  "Punctuator", // ShiftRightEq
+  "Punctuator", // Slash
+  "Punctuator", // SlashEq
+  "Punctuator", // Star
+  "Punctuator", // Star2
+  "Punctuator", // Star2Eq
+  "Punctuator", // StarEq
+  "Punctuator", // Tilde
+  "Punctuator", // Arrow
+  "Numeric", // Decimal
+  "Numeric", // Float
+  "Numeric", // Binary
+  "Numeric", // Octal
+  "Numeric", // Hex
+  "Numeric", // PositiveExponential
+  "Numeric", // NegativeExponential
+  "Numeric", // DecimalBigInt
+  "Numeric", // BinaryBigInt
+  "Numeric", // OctalBigInt
+  "Numeric", // HexBigInt
+  "String", // Str
+  "RegularExpression", // RegExp
+  "Template", // NoSubstitutionTemplate
+  "Template", // TemplateHead
+  "Template", // TemplateMiddle
+  "Template", // TemplateTail
+  "PrivateIdentifier", // PrivateIdentifier
+  "JSXText", // JSXText
+  "JSXIdentifier", // JSXIdentifier
+  "Punctuator", // At
+];
+
+function deserializeToken(pos: number): Token {
+  const pos32 = pos >> 2;
+  const start = uint32![pos32],
+    end = uint32![pos32 + 1];
+  let value = sourceText!.slice(start, end);
+
+  const kind = buffer![pos + 8];
+
+  if (kind === REGEXP_KIND) {
+    const patternEnd = value.lastIndexOf("/");
+    return {
+      // @ts-expect-error - TS doesn't understand `__proto__`
+      __proto__: TokenProto,
+      type: "RegularExpression",
+      value,
+      regex: {
+        flags: value.slice(patternEnd + 1),
+        pattern: value.slice(1, patternEnd),
+      },
+      start,
+      end,
+      range: [start, end],
+    };
+  }
+
+  const type = TOKEN_TYPES[kind];
+
+  if (kind <= LAST_KEYWORD_KIND) {
+    if (buffer![pos + 10] === 1) value = unescapeIdentifier(value);
+  } else if (kind === PRIVATE_IDENTIFIER_KIND) {
+    value = value.slice(1);
+    if (buffer![pos + 10] === 1) value = unescapeIdentifier(value);
+  }
+
+  return {
+    // @ts-expect-error - TS doesn't understand `__proto__`
+    __proto__: TokenProto,
+    type,
+    value,
+    start,
+    end,
+    range: [start, end],
+  };
+}
+
+function unescapeIdentifier(value: string): string {
+  return value.replace(/\\u(?:\{([0-9a-fA-F]+)\}|([0-9a-fA-F]{4}))/g, (_, hex1, hex2) =>
+    String.fromCodePoint(parseInt(hex1 ?? hex2, 16)),
+  );
 }
 
 /**
